@@ -14,7 +14,19 @@ client = genai.Client(
 st.set_page_config(page_title="AI PDF Chat", layout="wide")
 st.title("AI PDF Chat")
 
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
 uploaded_file = st.file_uploader("Upload a PDF", type=["pdf"])
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.write(message["content"])
+
+        if message["role"] == "assistant" and message.get("sources"):
+            st.markdown("**Sources:**")
+            st.write(", ".join([f"Page {p}" for p in message["sources"]]))
+
 question = st.chat_input("Ask a question about the PDF")
 
 def get_file_hash(file_bytes):
@@ -131,10 +143,9 @@ if uploaded_file:
     pdf_bytes = uploaded_file.getvalue()
     file_hash = get_file_hash(pdf_bytes)
 
-    if (
-        "file_hash" not in st.session_state
-        or st.session_state.file_hash != file_hash
-    ):
+    if st.session_state.get("file_hash") != file_hash:
+        st.session_state.messages = []
+
         with st.spinner("Reading PDF and creating embeddings..."):
             pages = extract_text_from_pdf(pdf_bytes)
             chunks = chunk_text(pages)
@@ -142,23 +153,32 @@ if uploaded_file:
 
         st.session_state.file_hash = file_hash
         st.session_state.collection = collection
-        st.session_state.pdf_name = uploaded_file.name
-
-        st.success("PDF processed and cached.")
     else:
         collection = st.session_state.collection
         st.info("Using cached PDF embeddings.")
-    if question:
-        with st.chat_message("user"):
-            st.write(question)
+    
+if question:
+    st.session_state.messages.append({
+        "role": "user",
+        "content": question
+    })
 
-        with st.spinner("Thinking..."):
-            context, source_pages = retrieve_context(collection, question)
-            answer = answer_question(context, question)
+    with st.chat_message("user"):
+        st.write(question)
 
-            with st.chat_message("assistant"):
-                st.write(answer)
+    with st.spinner("Thinking..."):
+        context, source_pages = retrieve_context(collection, question)
+        answer = answer_question(context, question)
 
-                if source_pages:
-                    st.markdown("**Sources:**")
-                    st.write(", ".join([f"Page {p}" for p in source_pages]))
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": answer,
+        "sources": source_pages
+    })
+
+    with st.chat_message("assistant"):
+        st.write(answer)
+
+        if source_pages:
+            st.markdown("**Sources:**")
+            st.write(", ".join([f"Page {p}" for p in source_pages]))
