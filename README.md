@@ -141,3 +141,17 @@ Bruce Liu
 ## License
 
 This project is for educational and portfolio purposes.
+
+## Screenshots
+
+### Upload PDF
+
+![Upload PDF](screenshots/upload.png)
+
+### Ask Questions
+
+![Question](screenshots/question.png)
+
+### Answer with Citations
+
+![Answer](screenshots/answer.png)
