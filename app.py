@@ -21,22 +21,38 @@ def get_file_hash(file_bytes):
     return hashlib.md5(file_bytes).hexdigest()
 
 def extract_text_from_pdf(pdf_bytes):
-    text = ""
+    pages = []
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-    for page in doc:
-        text += page.get_text()
+    for page_number, page in enumerate(doc, start=1):
+        text = page.get_text()
+        if text.strip():
+            pages.append({
+                "page": page_number,
+                "text": text
+            })
 
-    return text
+    return pages
 
-def chunk_text(text, chunk_size=800, overlap=150):
+def chunk_text(pages, chunk_size=800, overlap=150):
     chunks = []
-    start = 0
 
-    while start < len(text):
-        end = start + chunk_size
-        chunks.append(text[start:end])
-        start += chunk_size - overlap
+    for page in pages:
+        text = page["text"]
+        page_number = page["page"]
+
+        start = 0
+        while start < len(text):
+            end = start + chunk_size
+            chunk = text[start:end]
+
+            if chunk.strip():
+                chunks.append({
+                    "text": chunk,
+                    "page": page_number
+                })
+
+            start += chunk_size - overlap
 
     return chunks
 
@@ -57,12 +73,13 @@ def build_vector_db(chunks, file_hash):
     )
 
     for i, chunk in enumerate(chunks):
-        embedding = get_embedding(chunk)
+        embedding = get_embedding(chunk["text"])
 
         collection.add(
             ids=[str(i)],
-            documents=[chunk],
-            embeddings=[embedding]
+            documents=[chunk["text"]],
+            embeddings=[embedding],
+            metadatas=[{"page": chunk["page"]}]
         )
 
     return collection
@@ -75,7 +92,21 @@ def retrieve_context(collection, question, n_results=4):
         n_results=n_results
     )
 
-    return "\n\n".join(results["documents"][0])
+    documents = results["documents"][0]
+    metadatas = results["metadatas"][0]
+
+    context_parts = []
+    source_pages = []
+
+    for doc, metadata in zip(documents, metadatas):
+        page = metadata.get("page", "Unknown")
+        context_parts.append(f"[Page {page}]\n{doc}")
+        source_pages.append(page)
+
+    context = "\n\n".join(context_parts)
+    unique_pages = sorted(set(source_pages))
+
+    return context, unique_pages
 
 def answer_question(context, question):
     prompt = f"""
@@ -105,8 +136,8 @@ if uploaded_file:
         or st.session_state.file_hash != file_hash
     ):
         with st.spinner("Reading PDF and creating embeddings..."):
-            text = extract_text_from_pdf(pdf_bytes)
-            chunks = chunk_text(text)
+            pages = extract_text_from_pdf(pdf_bytes)
+            chunks = chunk_text(pages)
             collection = build_vector_db(chunks, file_hash)
 
         st.session_state.file_hash = file_hash
@@ -122,8 +153,12 @@ if uploaded_file:
             st.write(question)
 
         with st.spinner("Thinking..."):
-            context = retrieve_context(collection, question)
+            context, source_pages = retrieve_context(collection, question)
             answer = answer_question(context, question)
 
-        with st.chat_message("assistant"):
-            st.write(answer)
+            with st.chat_message("assistant"):
+                st.write(answer)
+
+                if source_pages:
+                    st.markdown("**Sources:**")
+                    st.write(", ".join([f"Page {p}" for p in source_pages]))
