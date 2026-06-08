@@ -4,6 +4,7 @@ import streamlit as st
 import chromadb
 from dotenv import load_dotenv
 from google import genai
+import hashlib
 
 load_dotenv()
 client = genai.Client(
@@ -16,9 +17,11 @@ st.title("AI PDF Chat")
 uploaded_file = st.file_uploader("Upload a PDF", type=["pdf"])
 question = st.chat_input("Ask a question about the PDF")
 
-def extract_text_from_pdf(uploaded_file):
+def get_file_hash(file_bytes):
+    return hashlib.md5(file_bytes).hexdigest()
+
+def extract_text_from_pdf(pdf_bytes):
     text = ""
-    pdf_bytes = uploaded_file.read()
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     for page in doc:
@@ -46,9 +49,12 @@ def get_embedding(text):
     return result.embeddings[0].values
 
 
-def build_vector_db(chunks):
+def build_vector_db(chunks, file_hash):
     chroma_client = chromadb.Client()
-    collection = chroma_client.get_or_create_collection("pdf_chunks")
+
+    collection = chroma_client.get_or_create_collection(
+        name=f"pdf_{file_hash}"
+    )
 
     for i, chunk in enumerate(chunks):
         embedding = get_embedding(chunk)
@@ -91,15 +97,26 @@ Question:
     return response.text
 
 if uploaded_file:
-    with st.spinner("Reading PDF..."):
-        text = extract_text_from_pdf(uploaded_file)
-        chunks = chunk_text(text)
+    pdf_bytes = uploaded_file.getvalue()
+    file_hash = get_file_hash(pdf_bytes)
 
-    with st.spinner("Creating vector database..."):
-        collection = build_vector_db(chunks)
+    if (
+        "file_hash" not in st.session_state
+        or st.session_state.file_hash != file_hash
+    ):
+        with st.spinner("Reading PDF and creating embeddings..."):
+            text = extract_text_from_pdf(pdf_bytes)
+            chunks = chunk_text(text)
+            collection = build_vector_db(chunks, file_hash)
 
-    st.success("PDF processed. You can now ask questions.")
+        st.session_state.file_hash = file_hash
+        st.session_state.collection = collection
+        st.session_state.pdf_name = uploaded_file.name
 
+        st.success("PDF processed and cached.")
+    else:
+        collection = st.session_state.collection
+        st.info("Using cached PDF embeddings.")
     if question:
         with st.chat_message("user"):
             st.write(question)
